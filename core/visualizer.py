@@ -1,10 +1,12 @@
-"""Visualization helpers: pandas + numpy + matplotlib + seaborn. Saves PNGs under output_dir."""
+# core/visualizer.py
+# Makes PNG charts from a transaction DataFrame. Each chart returns:
+#   {"chart_path": full path to PNG, "insight": short text summary}
 
 import os
-from typing import Dict
 
 import matplotlib
 
+# No GUI window — save files only (good for servers)
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,384 +15,418 @@ import seaborn as sns
 
 sns.set()
 
-# --- helpers ---
+# ---------------------------------------------------------------------------
+# Small helper functions (used by many charts)
+# ---------------------------------------------------------------------------
 
 
-def create_folder(path: str) -> None:
-    if not os.path.exists(path):
-        os.makedirs(path)
+def make_folder_if_needed(folder_path):
+    """Create folder if it does not exist."""
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
 
 
-def _save_plot(output_dir: str, filename: str) -> str:
-    create_folder(output_dir)
-    path = os.path.join(output_dir, filename)
+def save_figure_and_close(output_dir, file_name):
+    """Save the current matplotlib figure to a PNG and close it."""
+    make_folder_if_needed(output_dir)
+    full_path = os.path.join(output_dir, file_name)
     plt.tight_layout()
-    plt.savefig(path, dpi=120)
+    plt.savefig(full_path, dpi=120)
     plt.close()
-    return path
+    return full_path
 
 
-def _blank(output_dir: str, filename: str, message: str) -> Dict[str, str]:
+def blank_chart(output_dir, file_name, message):
+    """Draw a simple 'no data' image."""
     plt.figure(figsize=(8, 4))
     plt.text(0.5, 0.5, message, ha="center", va="center")
     plt.axis("off")
-    p = _save_plot(output_dir, filename)
-    return {"chart_path": p, "insight": message}
+    path = save_figure_and_close(output_dir, file_name)
+    return {"chart_path": path, "insight": message}
 
 
-def _debit_df(df: pd.DataFrame) -> pd.DataFrame:
-    return df[df["type"] == "debit"].copy()
+def get_only_debit_rows(df):
+    """Debit rows are expenses (money out)."""
+    mask = df["type"] == "debit"
+    return df[mask].copy()
 
 
-def _wide_monthly(df: pd.DataFrame) -> pd.DataFrame:
-    expense = _debit_df(df)
-    return expense.pivot_table(index="month", columns="category", values="abs_amount", aggfunc="sum", fill_value=0)
+def monthly_amount_table(df):
+    """
+    Rows = month, columns = category, values = total debit amount.
+    Used for correlation chart.
+    """
+    debits = get_only_debit_rows(df)
+    table = debits.pivot_table(
+        index="month",
+        columns="category",
+        values="abs_amount",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    return table
 
 
-# --- chart functions (signature used by app/services/charts.py) ---
+# ---------------------------------------------------------------------------
+# Chart 1–12: internal functions (df, output_dir) -> dict
+# ---------------------------------------------------------------------------
 
 
-def monthly_stacked_bar(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "monthly_stacked_bar.png", "No debit data for stacked bar")
-    data = expense.groupby(["month", "category"])["abs_amount"].sum().unstack(fill_value=0)
-    data.plot(kind="bar", stacked=True, figsize=(8, 4))
-    plt.title("Monthly Spending (Stacked)")
-    p = _save_plot(output_dir, "monthly_stacked_bar.png")
-    top = data.sum(axis=1).idxmax()
-    return {"chart_path": p, "insight": f"Highest total spending month: {top}."}
+def _chart_monthly_stacked_bar(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "monthly_stacked_bar.png", "No debit data")
+
+    grouped = debits.groupby(["month", "category"])["abs_amount"].sum()
+    wide = grouped.unstack(fill_value=0)
+    wide.plot(kind="bar", stacked=True, figsize=(8, 4))
+    plt.title("Monthly spending by category (stacked)")
+    path = save_figure_and_close(output_dir, "monthly_stacked_bar.png")
+
+    total_per_month = wide.sum(axis=1)
+    best_month = total_per_month.idxmax()
+    insight = "Highest total spending in month: " + str(best_month) + "."
+    return {"chart_path": path, "insight": insight}
 
 
-def monthly_line_trend(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "monthly_line_trend.png", "No debit data for monthly trend")
-    s = expense.groupby("month")["abs_amount"].sum()
+def _chart_monthly_line_trend(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "monthly_line_trend.png", "No debit data")
+
+    per_month = debits.groupby("month")["abs_amount"].sum()
     plt.figure(figsize=(9, 4))
-    plt.plot(s.index, s.values, marker="o")
-    plt.title("Month-over-Month Spending")
-    p = _save_plot(output_dir, "monthly_line_trend.png")
-    return {"chart_path": p, "insight": f"Peaks in {s.idxmax()}, lowest in {s.idxmin()}."}
+    plt.plot(per_month.index, per_month.values, marker="o")
+    plt.title("Total debits per month")
+    path = save_figure_and_close(output_dir, "monthly_line_trend.png")
+
+    insight = "Peak month: " + str(per_month.idxmax()) + ", lowest: " + str(per_month.idxmin()) + "."
+    return {"chart_path": path, "insight": insight}
 
 
-def month_category_heatmap(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "month_category_heatmap.png", "No debit data for heatmap")
-    pivot = expense.pivot_table(index="month", columns="category", values="abs_amount", aggfunc="sum", fill_value=0)
+def _chart_month_category_heatmap(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "month_category_heatmap.png", "No debit data")
+
+    table = debits.pivot_table(
+        index="month",
+        columns="category",
+        values="abs_amount",
+        aggfunc="sum",
+        fill_value=0,
+    )
     plt.figure(figsize=(10, 5))
-    sns.heatmap(pivot, cmap="Blues")
-    plt.title("Month vs Category Intensity")
-    p = _save_plot(output_dir, "month_category_heatmap.png")
-    mi = np.unravel_index(np.argmax(pivot.values), pivot.values.shape)
-    return {
-        "chart_path": p,
-        "insight": f"Most intense: month {pivot.index[mi[0]]}, category {pivot.columns[mi[1]]}.",
-    }
+    sns.heatmap(table, cmap="Blues")
+    plt.title("Month vs category (darker = more spend)")
+    path = save_figure_and_close(output_dir, "month_category_heatmap.png")
+
+    # Find which month+category cell has the largest value (simple, no fancy numpy)
+    flat = table.stack()
+    best_index = flat.idxmax()
+    best_month = best_index[0]
+    best_cat = best_index[1]
+    insight = "Strongest area: " + str(best_month) + " / " + str(best_cat) + "."
+    return {"chart_path": path, "insight": insight}
 
 
-def box_plot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(6, 4))
-    sns.boxplot(x=df["abs_amount"])
-    plt.title("Transaction Amount Spread")
-    p = _save_plot(output_dir, "box_plot.png")
-    q1, q3 = np.percentile(df["abs_amount"], [25, 75])
-    iqr = q3 - q1
-    outliers = int(((df["abs_amount"] < q1 - 1.5 * iqr) | (df["abs_amount"] > q3 + 1.5 * iqr)).sum())
-    return {"chart_path": p, "insight": f"Detected {outliers} potential outliers."}
+def _chart_pie_category(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "pie_chart_category.png", "No debit data")
 
-
-def violin_plot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(6, 4))
-    sns.violinplot(x=df["type"], y=df["abs_amount"])
-    plt.title("Amount by Type")
-    p = _save_plot(output_dir, "violin_plot.png")
-    return {"chart_path": p, "insight": "Shows distribution shape by credit vs debit."}
-
-
-def strip_plot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(9, 4))
-    sample = df.sample(min(800, len(df)), random_state=42)
-    sns.stripplot(data=sample, x="category", y="abs_amount", jitter=0.25, size=3)
-    plt.xticks(rotation=45)
-    plt.title("Strip Plot")
-    p = _save_plot(output_dir, "strip_plot.png")
-    return {"chart_path": p, "insight": "Individual points per category."}
-
-
-def swarm_plot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(9, 4))
-    sample = df.sample(min(400, len(df)), random_state=7)
-    sns.swarmplot(data=sample, x="category", y="abs_amount", size=3)
-    plt.xticks(rotation=45)
-    plt.title("Swarm Plot")
-    p = _save_plot(output_dir, "swarm_plot.png")
-    return {"chart_path": p, "insight": "Non-overlapping points where possible."}
-
-
-def histogram_plot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(6, 4))
-    sns.histplot(df["abs_amount"], bins=20)
-    plt.title("Histogram")
-    p = _save_plot(output_dir, "histogram_plot.png")
-    return {"chart_path": p, "insight": "Frequency of transaction sizes."}
-
-
-def kde_plot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(6, 4))
-    sns.kdeplot(df["abs_amount"], fill=True)
-    plt.title("KDE Plot")
-    p = _save_plot(output_dir, "kde_plot.png")
-    return {"chart_path": p, "insight": "Smooth density of amounts."}
-
-
-def joint_plot_food_travel(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    wide = _wide_monthly(df)
-    if "Food" not in wide.columns or "Travel" not in wide.columns or len(wide) < 2:
-        return _blank(output_dir, "joint_plot_food_travel.png", "Need Food and Travel across months")
-    jp = sns.jointplot(x=wide["Food"], y=wide["Travel"], kind="scatter", height=6)
-    jp.fig.suptitle("Food vs Travel (monthly)", y=1.02)
-    create_folder(output_dir)
-    path = os.path.join(output_dir, "joint_plot_food_travel.png")
-    jp.savefig(path, dpi=120)
-    plt.close("all")
-    corr = float(np.corrcoef(wide["Food"], wide["Travel"])[0, 1])
-    return {"chart_path": path, "insight": f"Monthly correlation Food vs Travel: {corr:.2f}."}
-
-
-def pair_plot_categories(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    wide = _wide_monthly(df)
-    if wide.shape[1] < 3 or len(wide) < 2:
-        return _blank(output_dir, "pair_plot_categories.png", "Need at least 3 categories and 2 months")
-    top_cols = wide.sum().sort_values(ascending=False).head(min(5, wide.shape[1])).index
-    pp = sns.pairplot(wide[top_cols])
-    create_folder(output_dir)
-    path = os.path.join(output_dir, "pair_plot_categories.png")
-    pp.savefig(path, dpi=120)
-    plt.close("all")
-    return {"chart_path": path, "insight": f"Pair plot for top categories: {', '.join(top_cols)}."}
-
-
-def correlation_heatmap(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    wide = _wide_monthly(df)
-    if wide.shape[1] < 2:
-        return _blank(output_dir, "correlation_heatmap.png", "Need at least 2 categories")
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(wide.corr(), annot=True, cmap="coolwarm", center=0)
-    plt.title("Category Correlation")
-    p = _save_plot(output_dir, "correlation_heatmap.png")
-    return {"chart_path": p, "insight": "Positive cells: categories move together month to month."}
-
-
-def pie_chart_category(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "pie_chart_category.png", "No debit data for pie")
-    data = expense.groupby("category")["abs_amount"].sum()
+    totals = debits.groupby("category")["abs_amount"].sum()
     plt.figure(figsize=(7, 7))
-    plt.pie(data.values, labels=data.index, autopct="%1.1f%%", startangle=90)
-    plt.title("Category Share")
-    p = _save_plot(output_dir, "pie_chart_category.png")
-    return {"chart_path": p, "insight": f"Largest share: {data.idxmax()}."}
+    plt.pie(totals.values, labels=totals.index, autopct="%1.1f%%", startangle=90)
+    plt.title("Share of debits by category")
+    path = save_figure_and_close(output_dir, "pie_chart_category.png")
+
+    top = totals.idxmax()
+    insight = "Largest share of spending: " + str(top) + "."
+    return {"chart_path": path, "insight": insight}
 
 
-def bar_top_categories(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "bar_top_categories.png", "No debit data")
-    data = expense.groupby("category")["abs_amount"].sum().sort_values(ascending=False).head(8)
+def _chart_bar_top_categories(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "bar_top_categories.png", "No debit data")
+
+    totals = debits.groupby("category")["abs_amount"].sum()
+    totals = totals.sort_values(ascending=False).head(8)
     plt.figure(figsize=(9, 4))
-    sns.barplot(x=data.index, y=data.values)
+    sns.barplot(x=totals.index, y=totals.values)
     plt.xticks(rotation=45)
-    plt.title("Top Categories")
-    p = _save_plot(output_dir, "bar_top_categories.png")
-    return {"chart_path": p, "insight": f"Top category: {data.index[0]}."}
+    plt.title("Top categories by amount")
+    path = save_figure_and_close(output_dir, "bar_top_categories.png")
+
+    first = totals.index[0]
+    insight = "Top category by total amount: " + str(first) + "."
+    return {"chart_path": path, "insight": insight}
 
 
-def count_plot_category(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    plt.figure(figsize=(9, 4))
-    sns.countplot(data=df, x="category", order=df["category"].value_counts().index)
-    plt.xticks(rotation=45)
-    plt.title("Transactions per Category")
-    p = _save_plot(output_dir, "count_plot_category.png")
-    top = df["category"].value_counts().idxmax()
-    return {"chart_path": p, "insight": f"Most frequent category: {top}."}
+def _chart_correlation_heatmap(df, output_dir):
+    table = monthly_amount_table(df)
+    if table.shape[1] < 2:
+        return blank_chart(output_dir, "correlation_heatmap.png", "Need at least 2 categories")
+
+    corr = table.corr()
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(corr, annot=True, cmap="coolwarm", center=0)
+    plt.title("How categories move together (by month)")
+    path = save_figure_and_close(output_dir, "correlation_heatmap.png")
+
+    insight = "Positive numbers mean two categories tend to rise or fall together across months."
+    return {"chart_path": path, "insight": insight}
 
 
-def weekly_monthly_comparison(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "weekly_monthly_comparison.png", "No debit data")
-    weekly = expense.groupby("week")["abs_amount"].sum()
-    monthly = expense.groupby("month")["abs_amount"].sum()
+def _chart_weekly_monthly_comparison(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "weekly_monthly_comparison.png", "No debit data")
+
+    weekly = debits.groupby("week")["abs_amount"].sum()
+    monthly = debits.groupby("month")["abs_amount"].sum()
     plt.figure(figsize=(8, 4))
     plt.plot(weekly.index, weekly.values, marker="o", label="Weekly")
     plt.plot(monthly.index, monthly.values, marker="o", label="Monthly")
     plt.legend()
     plt.xticks(rotation=45)
-    plt.title("Weekly vs Monthly")
-    p = _save_plot(output_dir, "weekly_monthly_comparison.png")
-    return {"chart_path": p, "insight": "Weekly shows short-term spikes; monthly shows trend."}
+    plt.title("Weekly vs monthly totals")
+    path = save_figure_and_close(output_dir, "weekly_monthly_comparison.png")
+
+    insight = "Weekly line shows short moves; monthly line shows the longer trend."
+    return {"chart_path": path, "insight": insight}
 
 
-def weekday_weekend_bar(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "weekday_weekend_bar.png", "No debit data")
-    g = expense.groupby("is_weekend")["abs_amount"].mean()
-    labels = ["Weekday", "Weekend"]
-    vals = [float(g.get(False, 0)), float(g.get(True, 0))]
+def _chart_weekday_weekend_bar(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "weekday_weekend_bar.png", "No debit data")
+
+    grouped = debits.groupby("is_weekend")["abs_amount"].mean()
+    weekday_avg = float(grouped.get(False, 0))
+    weekend_avg = float(grouped.get(True, 0))
     plt.figure(figsize=(6, 4))
-    sns.barplot(x=labels, y=vals)
-    plt.title("Avg Spending: Weekday vs Weekend")
-    p = _save_plot(output_dir, "weekday_weekend_bar.png")
-    insight = "Weekend average higher." if vals[1] > vals[0] else "Weekday average higher."
-    return {"chart_path": p, "insight": insight}
+    sns.barplot(x=["Weekday", "Weekend"], y=[weekday_avg, weekend_avg])
+    plt.title("Average debit amount (weekday vs weekend)")
+    path = save_figure_and_close(output_dir, "weekday_weekend_bar.png")
+
+    if weekend_avg > weekday_avg:
+        insight = "Average debit is higher on weekends."
+    else:
+        insight = "Average debit is higher on weekdays."
+    return {"chart_path": path, "insight": insight}
 
 
-def rolling_average_7day(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "rolling_average_7day.png", "No debit data")
-    daily = expense.groupby(expense["date"].dt.date)["abs_amount"].sum().sort_index()
-    roll = daily.rolling(window=7, min_periods=1).mean()
+def _chart_rolling_average_7day(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "rolling_average_7day.png", "No debit data")
+
+    by_day = debits.groupby(debits["date"].dt.date)["abs_amount"].sum()
+    by_day = by_day.sort_index()
+    rolling = by_day.rolling(window=7, min_periods=1).mean()
+
     plt.figure(figsize=(10, 4))
-    plt.plot(daily.index, daily.values, alpha=0.35, label="Daily")
-    plt.plot(roll.index, roll.values, color="red", label="7-day rolling")
+    plt.plot(by_day.index, by_day.values, alpha=0.35, label="Daily total")
+    plt.plot(rolling.index, rolling.values, color="red", label="7-day average")
     plt.legend()
     plt.xticks(rotation=45)
-    plt.title("7-Day Rolling Average")
-    p = _save_plot(output_dir, "rolling_average_7day.png")
-    return {"chart_path": p, "insight": "Rolling average smooths daily noise."}
+    plt.title("Daily spending vs 7-day rolling average")
+    path = save_figure_and_close(output_dir, "rolling_average_7day.png")
+
+    insight = "The red line smooths daily ups and downs so you see the real trend."
+    return {"chart_path": path, "insight": insight}
 
 
-def cumulative_spending_curve(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "cumulative_spending_curve.png", "No debit data")
-    daily = expense.groupby(expense["date"].dt.date)["abs_amount"].sum().sort_index()
-    cum = daily.cumsum()
+def _chart_cumulative_spending_curve(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "cumulative_spending_curve.png", "No debit data")
+
+    by_day = debits.groupby(debits["date"].dt.date)["abs_amount"].sum()
+    by_day = by_day.sort_index()
+    cumulative = by_day.cumsum()
+
     plt.figure(figsize=(10, 4))
-    plt.plot(cum.index, cum.values)
+    plt.plot(cumulative.index, cumulative.values)
     plt.xticks(rotation=45)
-    plt.title("Cumulative Spending")
-    p = _save_plot(output_dir, "cumulative_spending_curve.png")
-    return {"chart_path": p, "insight": f"Cumulative total: {cum.iloc[-1]:.2f}."}
+    plt.title("Cumulative debit spending over time")
+    path = save_figure_and_close(output_dir, "cumulative_spending_curve.png")
+
+    total = cumulative.iloc[-1]
+    insight = "Total money out (cumulative) by end of period: " + str(round(total, 2)) + "."
+    return {"chart_path": path, "insight": insight}
 
 
-def income_vs_expense_line(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    income = df[df["type"] == "credit"].groupby("month")["abs_amount"].sum()
-    expense = df[df["type"] == "debit"].groupby("month")["abs_amount"].sum()
-    if income.empty and expense.empty:
-        return _blank(output_dir, "income_vs_expense_line.png", "No data")
-    months = sorted(set(income.index) | set(expense.index))
+def _chart_income_vs_expense_line(df, output_dir):
+    credits = df[df["type"] == "credit"]
+    debits = df[df["type"] == "debit"]
+    income_by_month = credits.groupby("month")["abs_amount"].sum()
+    expense_by_month = debits.groupby("month")["abs_amount"].sum()
+
+    if len(income_by_month) == 0 and len(expense_by_month) == 0:
+        return blank_chart(output_dir, "income_vs_expense_line.png", "No data")
+
+    all_months = set(income_by_month.index) | set(expense_by_month.index)
+    all_months = sorted(all_months)
+
+    income_list = []
+    expense_list = []
+    for m in all_months:
+        income_list.append(float(income_by_month.get(m, 0)))
+        expense_list.append(float(expense_by_month.get(m, 0)))
+
     plt.figure(figsize=(9, 4))
-    plt.plot(months, [income.get(m, 0) for m in months], marker="o", label="Income")
-    plt.plot(months, [expense.get(m, 0) for m in months], marker="o", label="Expense")
+    plt.plot(all_months, income_list, marker="o", label="Income")
+    plt.plot(all_months, expense_list, marker="o", label="Expense")
     plt.legend()
-    plt.title("Income vs Expense by Month")
-    p = _save_plot(output_dir, "income_vs_expense_line.png")
-    msg = (
-        "Income above expense on average."
-        if np.mean([income.get(m, 0) for m in months]) >= np.mean([expense.get(m, 0) for m in months])
-        else "Expense dominates on average."
-    )
-    return {"chart_path": p, "insight": msg}
+    plt.title("Income vs expense by month")
+    path = save_figure_and_close(output_dir, "income_vs_expense_line.png")
+
+    avg_in = float(np.mean(income_list))
+    avg_out = float(np.mean(expense_list))
+    if avg_in >= avg_out:
+        insight = "On average, income is higher than expense across these months."
+    else:
+        insight = "On average, expense is higher than income across these months."
+    return {"chart_path": path, "insight": insight}
 
 
-def dashboard_subplot(df: pd.DataFrame, output_dir: str = "data/charts") -> Dict[str, str]:
-    expense = _debit_df(df)
-    if expense.empty:
-        return _blank(output_dir, "dashboard_subplot.png", "No debit data for dashboard")
-    by_cat = expense.groupby("category")["abs_amount"].sum().sort_values(ascending=False).head(6)
-    monthly = expense.groupby("month")["abs_amount"].sum()
-    daily = expense.groupby(expense["date"].dt.date)["abs_amount"].sum().sort_index()
-    weekday = expense.groupby("day_name")["abs_amount"].sum()
-    order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    weekday = weekday.reindex(order).fillna(0)
+def _chart_dashboard_subplot(df, output_dir):
+    debits = get_only_debit_rows(df)
+    if len(debits) == 0:
+        return blank_chart(output_dir, "dashboard_subplot.png", "No debit data")
+
+    top_cats = debits.groupby("category")["abs_amount"].sum()
+    top_cats = top_cats.sort_values(ascending=False).head(6)
+
+    monthly = debits.groupby("month")["abs_amount"].sum()
+    daily = debits.groupby(debits["date"].dt.date)["abs_amount"].sum()
+    daily = daily.sort_index()
+
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    by_weekday = debits.groupby("day_name")["abs_amount"].sum()
+    by_weekday = by_weekday.reindex(day_order)
+    by_weekday = by_weekday.fillna(0)
 
     fig, axes = plt.subplots(2, 3, figsize=(14, 8))
-    ax = axes.ravel()
-    sns.barplot(x=by_cat.index, y=by_cat.values, ax=ax[0])
-    ax[0].tick_params(axis="x", rotation=45)
-    ax[0].set_title("Top Categories")
-    ax[1].plot(monthly.index, monthly.values, marker="o")
-    ax[1].set_title("Monthly")
-    sns.histplot(df["abs_amount"], bins=25, ax=ax[2])
-    ax[2].set_title("Histogram")
+    ax_list = [axes[0][0], axes[0][1], axes[0][2], axes[1][0], axes[1][1], axes[1][2]]
+
+    sns.barplot(x=top_cats.index, y=top_cats.values, ax=ax_list[0])
+    ax_list[0].tick_params(axis="x", rotation=45)
+    ax_list[0].set_title("Top categories")
+
+    ax_list[1].plot(monthly.index, monthly.values, marker="o")
+    ax_list[1].set_title("Monthly debits")
+
+    sns.histplot(df["abs_amount"], bins=25, ax=ax_list[2])
+    ax_list[2].set_title("All amounts (distribution)")
+
     roll = daily.rolling(7, min_periods=1).mean()
-    ax[3].plot(roll.index, roll.values, color="red")
-    ax[3].tick_params(axis="x", rotation=45)
-    ax[3].set_title("7d rolling")
-    sns.barplot(x=weekday.index, y=weekday.values, ax=ax[4])
-    ax[4].tick_params(axis="x", rotation=45)
-    ax[4].set_title("By weekday")
+    ax_list[3].plot(roll.index, roll.values, color="red")
+    ax_list[3].tick_params(axis="x", rotation=45)
+    ax_list[3].set_title("7-day rolling")
+
+    sns.barplot(x=by_weekday.index, y=by_weekday.values, ax=ax_list[4])
+    ax_list[4].tick_params(axis="x", rotation=45)
+    ax_list[4].set_title("Total by weekday")
+
     inc = df[df["type"] == "credit"].groupby("month")["abs_amount"].sum()
-    all_m = sorted(set(monthly.index) | set(inc.index))
-    ax[5].plot(all_m, [inc.get(m, 0) for m in all_m], marker="o", label="Income")
-    ax[5].plot(all_m, [monthly.get(m, 0) for m in all_m], marker="o", label="Expense")
-    ax[5].legend()
-    ax[5].set_title("Income vs Expense")
-    plt.suptitle("Dashboard", y=1.02)
-    create_folder(output_dir)
+    months_both = set(monthly.index) | set(inc.index)
+    months_both = sorted(months_both)
+    inc_vals = [float(inc.get(m, 0)) for m in months_both]
+    exp_vals = [float(monthly.get(m, 0)) for m in months_both]
+    ax_list[5].plot(months_both, inc_vals, marker="o", label="Income")
+    ax_list[5].plot(months_both, exp_vals, marker="o", label="Expense")
+    ax_list[5].legend()
+    ax_list[5].set_title("Income vs expense")
+
+    plt.suptitle("Summary dashboard", y=1.02)
+    make_folder_if_needed(output_dir)
     path = os.path.join(output_dir, "dashboard_subplot.png")
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
-    return {"chart_path": path, "insight": "Combined view of key patterns."}
+
+    insight = "Six small charts in one image: overview of spending patterns."
+    return {"chart_path": path, "insight": insight}
 
 
-def load_and_prepare(csv_path: str) -> pd.DataFrame:
-    """Load CSV for standalone use (same shape as batch pipeline)."""
-    df = pd.read_csv(csv_path)
-    expected = {"date", "description", "amount", "type"}
-    colmap = {c.lower(): c for c in df.columns}
-    rename = {colmap[k]: k for k in expected if k in colmap}
-    df = df.rename(columns=rename)
-    for need in expected:
-        if need not in df.columns:
-            df[need] = pd.NA
-    df["description"] = df["description"].fillna("UNKNOWN TRANSACTION")
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
-    df["type"] = df["type"].astype(str).str.strip().str.lower()
-    inferred = np.where(df["amount"] < 0, "debit", "credit")
-    df["type"] = np.where(df["type"].isin(["credit", "debit"]), df["type"], inferred)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").fillna(pd.Timestamp("1970-01-01"))
-    df["month"] = df["date"].dt.to_period("M").astype(str)
-    df["week"] = df["date"].dt.to_period("W").astype(str)
-    df["day_name"] = df["date"].dt.day_name()
-    df["is_weekend"] = df["date"].dt.dayofweek >= 5
-    df["abs_amount"] = df["amount"].abs()
-    if "category" not in df.columns:
-        df["category"] = "Other"
-    else:
-        df["category"] = df["category"].fillna("Other")
-    return df
+# Maps name -> internal function (used by run_one_chart and by charts.py)
+CHART_FUNCTIONS = {
+    "monthly_stacked_bar": _chart_monthly_stacked_bar,
+    "monthly_line_trend": _chart_monthly_line_trend,
+    "month_category_heatmap": _chart_month_category_heatmap,
+    "pie_chart_category": _chart_pie_category,
+    "bar_top_categories": _chart_bar_top_categories,
+    "correlation_heatmap": _chart_correlation_heatmap,
+    "weekly_monthly_comparison": _chart_weekly_monthly_comparison,
+    "weekday_weekend_bar": _chart_weekday_weekend_bar,
+    "rolling_average_7day": _chart_rolling_average_7day,
+    "cumulative_spending_curve": _chart_cumulative_spending_curve,
+    "income_vs_expense_line": _chart_income_vs_expense_line,
+    "dashboard_subplot": _chart_dashboard_subplot,
+}
+
+# Backwards compatibility for code that reads _BUILDERS
+_BUILDERS = CHART_FUNCTIONS
 
 
-def generate_all_visuals(csv_path: str, output_dir: str = "data/charts") -> Dict[str, Dict[str, str]]:
-    df = load_and_prepare(csv_path)
-    return {
-        "monthly_stacked_bar": monthly_stacked_bar(df, output_dir),
-        "monthly_line_trend": monthly_line_trend(df, output_dir),
-        "month_category_heatmap": month_category_heatmap(df, output_dir),
-        "box_plot": box_plot(df, output_dir),
-        "violin_plot": violin_plot(df, output_dir),
-        "strip_plot": strip_plot(df, output_dir),
-        "swarm_plot": swarm_plot(df, output_dir),
-        "histogram_plot": histogram_plot(df, output_dir),
-        "kde_plot": kde_plot(df, output_dir),
-        "joint_plot_food_travel": joint_plot_food_travel(df, output_dir),
-        "pair_plot_categories": pair_plot_categories(df, output_dir),
-        "correlation_heatmap": correlation_heatmap(df, output_dir),
-        "pie_chart_category": pie_chart_category(df, output_dir),
-        "bar_top_categories": bar_top_categories(df, output_dir),
-        "count_plot_category": count_plot_category(df, output_dir),
-        "weekly_monthly_comparison": weekly_monthly_comparison(df, output_dir),
-        "weekday_weekend_bar": weekday_weekend_bar(df, output_dir),
-        "rolling_average_7day": rolling_average_7day(df, output_dir),
-        "cumulative_spending_curve": cumulative_spending_curve(df, output_dir),
-        "income_vs_expense_line": income_vs_expense_line(df, output_dir),
-        "dashboard_subplot": dashboard_subplot(df, output_dir),
-    }
+def run_one_chart(chart_name, df, output_dir="data/charts"):
+    """Run a single chart by its string name."""
+    fn = CHART_FUNCTIONS[chart_name]
+    return fn(df, output_dir)
+
+
+# ---------------------------------------------------------------------------
+# Public API — same names as before (app/services/charts.py uses these)
+# ---------------------------------------------------------------------------
+
+
+def monthly_stacked_bar(df, output_dir="data/charts"):
+    return _chart_monthly_stacked_bar(df, output_dir)
+
+
+def monthly_line_trend(df, output_dir="data/charts"):
+    return _chart_monthly_line_trend(df, output_dir)
+
+
+def month_category_heatmap(df, output_dir="data/charts"):
+    return _chart_month_category_heatmap(df, output_dir)
+
+
+def pie_chart_category(df, output_dir="data/charts"):
+    return _chart_pie_category(df, output_dir)
+
+
+def bar_top_categories(df, output_dir="data/charts"):
+    return _chart_bar_top_categories(df, output_dir)
+
+
+def correlation_heatmap(df, output_dir="data/charts"):
+    return _chart_correlation_heatmap(df, output_dir)
+
+
+def weekly_monthly_comparison(df, output_dir="data/charts"):
+    return _chart_weekly_monthly_comparison(df, output_dir)
+
+
+def weekday_weekend_bar(df, output_dir="data/charts"):
+    return _chart_weekday_weekend_bar(df, output_dir)
+
+
+def rolling_average_7day(df, output_dir="data/charts"):
+    return _chart_rolling_average_7day(df, output_dir)
+
+
+def cumulative_spending_curve(df, output_dir="data/charts"):
+    return _chart_cumulative_spending_curve(df, output_dir)
+
+
+def income_vs_expense_line(df, output_dir="data/charts"):
+    return _chart_income_vs_expense_line(df, output_dir)
+
+
+def dashboard_subplot(df, output_dir="data/charts"):
+    return _chart_dashboard_subplot(df, output_dir)

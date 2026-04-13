@@ -82,22 +82,14 @@ def generate_advanced_charts_for_batch(batch_id: int) -> dict:
     if df.empty:
         return {}
 
+    # 12 charts: composition, trends, correlation, time grain, behavior, cashflow, summary
     funcs = {
         "monthly_stacked_bar": visualizer.monthly_stacked_bar,
         "monthly_line_trend": visualizer.monthly_line_trend,
         "month_category_heatmap": visualizer.month_category_heatmap,
-        "box_plot": visualizer.box_plot,
-        "violin_plot": visualizer.violin_plot,
-        "strip_plot": visualizer.strip_plot,
-        "swarm_plot": visualizer.swarm_plot,
-        "histogram_plot": visualizer.histogram_plot,
-        "kde_plot": visualizer.kde_plot,
-        "joint_plot_food_travel": visualizer.joint_plot_food_travel,
-        "pair_plot_categories": visualizer.pair_plot_categories,
-        "correlation_heatmap": visualizer.correlation_heatmap,
         "pie_chart_category": visualizer.pie_chart_category,
         "bar_top_categories": visualizer.bar_top_categories,
-        "count_plot_category": visualizer.count_plot_category,
+        "correlation_heatmap": visualizer.correlation_heatmap,
         "weekly_monthly_comparison": visualizer.weekly_monthly_comparison,
         "weekday_weekend_bar": visualizer.weekday_weekend_bar,
         "rolling_average_7day": visualizer.rolling_average_7day,
