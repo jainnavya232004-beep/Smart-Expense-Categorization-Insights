@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Local runtime/state
+instance/
+logs/
+static/charts/
+data/charts/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/

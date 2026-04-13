@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Upload — Smart Expense{% endblock %}
+{% block content %}
+<h1>Upload transactions (CSV)</h1>
+<p class="muted">Expected columns: <code>date</code>, <code>description</code>, <code>amount</code>, <code>type</code> (credit or debit). Same format your users will upload.</p>
+<div class="card">
+  <form id="upload-form">
+    <label for="file">Choose CSV file(s)</label><br />
+    <input type="file" id="file" name="files" accept=".csv,text/csv" multiple required />
+    <div>
+      <button type="submit" class="btn">Upload &amp; process</button>
+    </div>
+  </form>
+  <div id="out"></div>
+</div>
+<p class="muted">Sample file: <code>data/sample_transactions.csv</code></p>
+<script>
+document.getElementById("upload-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const out = document.getElementById("out");
+  out.innerHTML = "";
+  const fd = new FormData();
+  const files = Array.from(document.getElementById("file").files || []);
+  if (!files.length) return;
+  files.forEach((f) => fd.append("files", f));
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      out.innerHTML = `<div class="msg err">${data.error || "Upload failed"}</div>`;
+      return;
+    }
+    const uploads = data.uploads || [];
+    if (uploads.length <= 1 && data.batch_id) {
+      const charts = data.chart_urls || {};
+      out.innerHTML = `
+        <div class="msg ok">${data.message} — ${data.total_records} rows (batch #${data.batch_id})</div>
+        <p class="muted">Saved chart files (server) — shown below immediately:</p>
+        <div class="charts-row">
+          <div class="chart-box"><h3>Category spending (PNG)</h3>
+            <img src="${charts.category_spending || ""}?t=${Date.now()}" alt="Category chart" /></div>
+          <div class="chart-box"><h3>Monthly trend (PNG)</h3>
+            <img src="${charts.monthly_trend || ""}?t=${Date.now()}" alt="Monthly chart" /></div>
+        </div>
+        <p><a class="btn" href="/dashboard?batch_id=${data.batch_id}">Open dashboard</a>
+        <a class="btn" href="/transactions?batch_id=${data.batch_id}" style="margin-left:.5rem">View transactions</a></p>`;
+      return;
+    }
+
+    const listHtml = uploads.map((u) =>
+      `<li><strong>${u.filename}</strong>: ${u.total_records} rows (batch #${u.batch_id}) - <a href="/dashboard?batch_id=${u.batch_id}">dashboard</a></li>`
+    ).join("");
+    out.innerHTML = `
+      <div class="msg ok">${data.message} — ${data.total_records} total rows across ${data.file_count} files</div>
+      <ul>${listHtml}</ul>`;
+  } catch (err) {
+    out.innerHTML = `<div class="msg err">${String(err)}</div>`;
+  }
+});
+</script>
+{% endblock %}

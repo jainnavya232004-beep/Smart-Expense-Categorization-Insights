@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Smart Expense{% endblock %}
+{% block content %}
+<h1>Financial summary</h1>
+<p class="muted">Figures use the latest upload unless you pass <code>?batch_id=</code> in the URL.</p>
+<div id="stats" class="grid">
+  <div class="stat"><div class="label">Total income</div><div class="value">{{ "%.2f"|format(summary.total_income or 0) }}</div></div>
+  <div class="stat"><div class="label">Total expense</div><div class="value">{{ "%.2f"|format(summary.total_expense or 0) }}</div></div>
+  <div class="stat"><div class="label">Net balance</div><div class="value">{{ "%.2f"|format(summary.net_balance or 0) }}</div></div>
+</div>
+<div class="card">
+  <h2>Top spending category</h2>
+  <p id="topcat" class="muted">
+    {% if top and top.category %}
+      {{ top.category }}: {{ "%.2f"|format(top.amount or 0) }}
+    {% else %}
+      No debit data yet.
+    {% endif %}
+  </p>
+</div>
+<div class="card">
+  <h2>Saved charts (all generated PNGs)</h2>
+  <p class="muted">All charts for this batch are shown from <code>static/charts/</code>.</p>
+  <div id="pngs" class="charts-row">
+    {% if gallery and gallery|length > 0 %}
+      {% for g in gallery %}
+      <div class="chart-box"><h3>{{ g.title }}</h3>
+        <img src="{{ g.url }}?t={{ batch_id }}" alt="{{ g.title }}" loading="lazy" /></div>
+      {% endfor %}
+    {% else %}
+      <div class="msg err">No saved PNG charts for this batch yet. Upload CSV once, then open dashboard again.</div>
+    {% endif %}
+  </div>
+</div>
+<div class="card">
+  <h2>Live charts (Chart.js)</h2>
+  <p class="muted">Built from the same API data as the summary — updates when you refresh.</p>
+  <div class="charts-row">
+    <div class="chart-box"><canvas id="chartCats" height="220"></canvas></div>
+    <div class="chart-box"><canvas id="chartMonth" height="220"></canvas></div>
+  </div>
+</div>
+<p><a class="btn" href="/api/export">Download categorized CSV</a></p>
+<script>
+function loadChartJsIfNeeded() {
+  if (typeof Chart !== "undefined") return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js";
+    s.async = true;
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+    // Don't let charts block summary rendering forever.
+    setTimeout(() => resolve(typeof Chart !== "undefined"), 2500);
+  });
+}
+
+async function loadLiveCharts() {
+  const catSum = {{ cat_sum | tojson }};
+  const monthly = {{ monthly | tojson }};
+  const chartReady = await loadChartJsIfNeeded();
+  const catLabels = catSum.map((c) => c.category);
+  const catVals = catSum.map((c) => c.amount);
+  if (chartReady && typeof Chart !== "undefined") {
+    new Chart(document.getElementById("chartCats"), {
+      type: "bar",
+      data: {
+        labels: catLabels,
+        datasets: [{ label: "Debit total", data: catVals, backgroundColor: "#38bdf8" }],
+      },
+      options: { responsive: true, plugins: { legend: { labels: { color: "#e2e8f0" } } }, scales: {
+        x: { ticks: { color: "#94a3b8" } }, y: { ticks: { color: "#94a3b8" } }
+      }}},
+    });
+  }
+
+  const mLabels = monthly.map((m) => m.month);
+  const mVals = monthly.map((m) => m.amount);
+  if (chartReady && typeof Chart !== "undefined") {
+    new Chart(document.getElementById("chartMonth"), {
+      type: "line",
+      data: {
+        labels: mLabels,
+        datasets: [{ label: "Monthly debits", data: mVals, borderColor: "#34d399", tension: 0.2 }],
+      },
+      options: { responsive: true, plugins: { legend: { labels: { color: "#e2e8f0" } } }, scales: {
+        x: { ticks: { color: "#94a3b8" } }, y: { ticks: { color: "#94a3b8" } }
+      }}},
+    });
+  }
+  if (!chartReady) {
+    const target = document.getElementById("topcat");
+    if (target) {
+      target.textContent += " (Live charts disabled: Chart.js CDN blocked)";
+    }
+  }
+}
+loadLiveCharts().catch((e) => {
+  document.getElementById("stats").insertAdjacentHTML("beforeend", `<div class="msg err">${e}</div>`);
+  const tc = document.getElementById("topcat");
+  if (tc) tc.textContent = "—";
+});
+</script>
+{% endblock %}

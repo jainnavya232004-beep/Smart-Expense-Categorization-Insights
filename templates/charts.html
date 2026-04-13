@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Charts — Smart Expense{% endblock %}
+{% block content %}
+<h1>Saved charts (PNG)</h1>
+<p class="muted">
+  After you upload a CSV, the backend writes two images into the project folder
+  <code>static/charts/</code> (e.g. <code>batch_1_category_spending.png</code>,
+  <code>batch_1_monthly_trend.png</code>). They are also served at
+  <code>/static/charts/...</code> and listed in <code>/api/summary</code> as <code>chart_urls</code>.
+</p>
+<p class="muted">
+  Optional: open <code>/charts?batch_id=2</code> to pin a specific upload batch (latest batch is used if you omit it).
+</p>
+
+<div class="card">
+  <h2>Quick manual test</h2>
+  <ol class="muted" style="line-height:1.7">
+    <li>Run the server: <code>python run.py</code></li>
+    <li>Open <a href="/docs">Swagger</a> → try <code>POST /api/upload</code> with your CSV.</li>
+    <li>Open this page or <a href="/dashboard">Dashboard</a> — PNGs + interactive Chart.js graphs on the dashboard.</li>
+    <li>Confirm files exist under <code>static/charts/</code> in the project directory.</li>
+  </ol>
+</div>
+
+<div id="chart-area" class="card">Loading…</div>
+<script>
+async function load() {
+  const el = document.getElementById("chart-area");
+  const params = new URLSearchParams(window.location.search);
+  const batch = params.get("batch_id");
+  const q = batch ? `?batch_id=${encodeURIComponent(batch)}` : "";
+  try {
+    const sum = await fetch("/api/summary" + q).then((r) => r.json());
+    const urls = sum.chart_urls || {};
+    const bid = sum.batch_id;
+    if (!urls.category_spending && !urls.monthly_trend) {
+      el.innerHTML =
+        "<p>No chart files yet. <a href='/'>Upload a CSV</a> first (or pass a valid <code>batch_id</code>).</p>";
+      return;
+    }
+    el.innerHTML = `
+      <p><strong>Batch</strong> #${bid ?? "—"}</p>
+      <div class="charts-row">
+        <div class="chart-box"><h3>Category spending</h3>
+          <img src="${urls.category_spending || ""}?t=${Date.now()}" alt="Category spending chart" /></div>
+        <div class="chart-box"><h3>Monthly trend</h3>
+          <img src="${urls.monthly_trend || ""}?t=${Date.now()}" alt="Monthly trend chart" /></div>
+      </div>
+      <p class="muted">Direct links (open in new tab):<br />
+        <a href="${urls.category_spending}" target="_blank" rel="noopener">${urls.category_spending}</a><br />
+        <a href="${urls.monthly_trend}" target="_blank" rel="noopener">${urls.monthly_trend}</a>
+      </p>
+      <p><a class="btn" href="/dashboard${batch ? "?batch_id=" + encodeURIComponent(batch) : ""}">Open dashboard (PNG + Chart.js)</a></p>`;
+  } catch (e) {
+    el.innerHTML = `<p class="msg err">${String(e)}</p>`;
+  }
+}
+load();
+</script>
+{% endblock %}

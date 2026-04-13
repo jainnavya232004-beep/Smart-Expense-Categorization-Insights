@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Transactions — Smart Expense{% endblock %}
+{% block content %}
+<h1>Transactions</h1>
+<p class="muted">Latest batch by default. Use filters in the API or add <code>?batch_id=</code> to this page URL.</p>
+<div id="tbl" class="card">Loading…</div>
+<script>
+async function load() {
+  const params = new URLSearchParams(window.location.search);
+  const batch = params.get("batch_id");
+  const q = batch ? `?batch_id=${encodeURIComponent(batch)}&limit=100` : "?limit=100";
+  const res = await fetch("/api/transactions" + q);
+  const data = await res.json();
+  const rows = data.items || [];
+  if (!rows.length) {
+    document.getElementById("tbl").innerHTML = "<p>No transactions yet. Upload a CSV first.</p>";
+    return;
+  }
+  const head = `<tr><th>Date</th><th>Description</th><th>Amount</th><th>Type</th><th>Category</th></tr>`;
+  const body = rows.map((r) => `<tr><td>${r.date}</td><td>${escapeHtml(r.description)}</td><td>${r.amount}</td><td>${r.type}</td><td>${escapeHtml(r.category)}</td></tr>`).join("");
+  document.getElementById("tbl").innerHTML = `<p class="muted">Batch #${data.batch_id ?? "—"} — ${data.total} total</p><table>${head}${body}</table>`;
+}
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+load();
+</script>
+{% endblock %}
